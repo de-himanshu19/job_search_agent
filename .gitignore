@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+sent_jobs.json
+job_agent_log.txt
+.vscode/
