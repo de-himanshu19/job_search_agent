@@ -457,6 +457,409 @@ git push -u origin main
 
 ---
 
+## Project Logic and Workflow
+
+This project works as a local Python-based job search automation tool. The main goal is to search jobs from the German Arbeitsagentur API, filter unsuitable jobs, score the remaining jobs based on profile relevance, and send the best job matches to Telegram.
+
+The project follows this workflow:
+
+```text
+Search Keywords
+      ↓
+Arbeitsagentur Search API Request
+      ↓
+Parse JSON Search Results
+      ↓
+Clean and Remove Duplicates
+      ↓
+Fetch Full Job Details
+      ↓
+Check German Language Requirements
+      ↓
+Check English-Friendly Signals
+      ↓
+Score Jobs
+      ↓
+Remove Already-Sent Jobs
+      ↓
+Send Top Jobs to Telegram
+      ↓
+Save Sent Jobs History
+```
+
+---
+
+## 1. Configuration
+
+The file `config.py` contains the main search settings.
+
+It includes:
+
+* Target job titles such as Data Analyst, Business Analyst, Risk Analyst, Compliance Analyst, KYC Analyst, AML Analyst, and Reporting Analyst
+* German search terms such as Datenanalyst, Risikoanalyst, Geldwäsche, Berichtswesen, and Finanzdienstleistungen
+* Positive keywords related to banking, finance, SQL, Excel, SAP, reporting, KYC, AML, compliance, and operations
+* Negative keywords for jobs that are not suitable, such as software developer roles or roles requiring very high German language skills
+
+This allows the project to search for jobs that match a banking, finance, data, reporting, compliance, and operations profile.
+
+---
+
+## 2. Job Search Request
+
+The main job search happens in `search_arbeitsagentur.py`.
+
+For every role defined in `TARGET_ROLES`, the script sends a request to the Arbeitsagentur Jobsuche API.
+
+The request is made using:
+
+```python
+response = requests.get(BASE_URL, headers=HEADERS, params=params, timeout=20)
+```
+
+Here:
+
+* `BASE_URL` is the Arbeitsagentur search API endpoint
+* `HEADERS` contains the API key/header required by the API
+* `params` contains search parameters such as keyword, location, job type, page size, and published date range
+* `timeout=20` prevents the script from waiting forever if the API does not respond
+
+After the request is successful, the response is parsed using:
+
+```python
+data = response.json()
+```
+
+This converts the API JSON response into a Python dictionary.
+
+The job list is extracted from:
+
+```python
+data.get("ergebnisliste", [])
+```
+
+So the search results are not manually created. They are downloaded from the Arbeitsagentur API and parsed by the script.
+
+---
+
+## 3. Job Data Extraction
+
+After the search API returns results, the script extracts useful job information from each job.
+
+The extracted fields include:
+
+* Job title
+* Company name
+* City/location
+* Publication date
+* Profession
+* Job reference number
+* Job link
+* Search role that found the job
+
+These extracted jobs are stored in a Pandas DataFrame.
+
+A DataFrame is used because it makes it easier to clean, filter, score, sort, and display job results.
+
+---
+
+## 4. Basic Cleaning and Duplicate Removal
+
+After collecting jobs from multiple search terms, some jobs may appear more than once.
+
+For example, the same job may appear under both:
+
+```text
+Data Analyst
+Business Analyst
+Reporting
+```
+
+To avoid sending duplicate jobs, the script removes duplicates using the job reference number.
+
+The script also applies a basic negative keyword filter to remove clearly unsuitable jobs, such as roles focused on software development or roles requiring very high German language skills.
+
+---
+
+## 5. Fetching Full Job Details
+
+The search API gives basic job information, but it may not contain the full job description.
+
+Therefore, the script makes a second API request for each job using the job reference number.
+
+First, the job reference number is encoded. Then the detail URL is created:
+
+```python
+url = f"{DETAIL_BASE_URL}/{encoded_ref}"
+```
+
+The job detail request is made using:
+
+```python
+response = requests.get(url, headers=HEADERS, timeout=20)
+```
+
+If the API response is successful, the full JSON response is parsed:
+
+```python
+data = response.json()
+```
+
+Then the full job detail JSON is converted into lowercase searchable text:
+
+```python
+detail_text = json.dumps(data, ensure_ascii=False).lower()
+```
+
+This makes it easier to search inside the complete job description for language requirements and other important signals.
+
+---
+
+## 6. German Language Filtering
+
+The function `filter_german_fluent_jobs()` checks the full job detail text.
+
+It searches for phrases that indicate the job requires fluent, business-level, C1, C2, or native-level German.
+
+Examples of blocked phrases include:
+
+```text
+fließend Deutsch
+verhandlungssicher Deutsch
+Deutsch C1
+Deutsch C2
+native German
+fluent German
+sehr gute Deutschkenntnisse
+```
+
+If any of these phrases are found in the full job detail text, the job is removed.
+
+This is important because the project is designed for a candidate with English fluency and basic/intermediate German learning progress, not for roles requiring fluent German.
+
+---
+
+## 7. English-Friendly and German-Risk Signals
+
+After filtering out jobs with strong German requirements, the script checks for two types of signals.
+
+### English-Friendly Signals
+
+The script checks whether the job detail contains words such as:
+
+```text
+English
+Englisch
+international
+global
+multinational
+international team
+```
+
+If these signals are found, the job receives a positive score boost.
+
+### German-Heavy Risk Signals
+
+The script also checks whether the job looks customer-facing or German-heavy.
+
+Examples include:
+
+```text
+Kundenberatung
+Kundenservice
+telefonische Kundenbetreuung
+direkter Kundenkontakt
+Firmenkundenberatung
+Privatkundenberatung
+```
+
+These jobs are not always removed, but they receive a score penalty because they may require stronger spoken German.
+
+---
+
+## 8. Job Scoring Logic
+
+The scoring logic is stored in `job_scorer.py`.
+
+The function `calculate_score()` receives one job as a dictionary and returns:
+
+```text
+score
+reasons
+```
+
+The score is based on several factors:
+
+* Job title match
+* Banking or finance company match
+* Profile keyword match
+* Good city match
+* Official profession match
+* English-friendly signal
+* German-heavy customer-facing risk
+
+For example, a job may receive points if the title contains:
+
+```text
+Data Analyst
+Business Analyst
+Risk Analyst
+Compliance
+KYC
+AML
+Reporting
+```
+
+It may also receive points if the company or profession is related to banking, finance, risk, compliance, or operations.
+
+The function also creates explanation text called `reasons`, which explains why the job received its score.
+
+Example reason:
+
+```text
+title: risk analyst | bank/finance company: bank | profile keywords: reporting, bank, risk | English-friendly signal found in job details
+```
+
+This makes the scoring transparent and easy to understand.
+
+---
+
+## 9. Applying the Score to All Jobs
+
+Each job row in the DataFrame is passed to the scoring function.
+
+The script converts each row into a dictionary and sends it to `calculate_score()`.
+
+The returned score and reason are stored in two new DataFrame columns:
+
+```text
+score
+reasons
+```
+
+This allows the script to sort jobs by score and select the best matches.
+
+---
+
+## 10. Already-Sent Job Tracking
+
+The file `job_history.py` manages duplicate tracking across different runs.
+
+The project uses a local file called:
+
+```text
+sent_jobs.json
+```
+
+This file stores job reference numbers that were already sent to Telegram.
+
+Before sending new jobs, the script checks whether a job reference number already exists in `sent_jobs.json`.
+
+If the job was already sent before, it is skipped.
+
+This prevents the same job from being sent repeatedly every day.
+
+---
+
+## 11. Telegram Notification
+
+The file `telegram_sender.py` manages Telegram communication.
+
+The Telegram bot token and chat ID are stored in a local `.env` file:
+
+```text
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=your_telegram_chat_id
+```
+
+The script sends a message using the Telegram Bot API.
+
+The message includes:
+
+* Top matched jobs
+* Company name
+* City
+* Score
+* Job link
+
+The request is sent using:
+
+```python
+response = requests.post(url, data=payload, timeout=20)
+```
+
+If Telegram returns a successful response, the script marks those jobs as sent.
+
+If Telegram sending fails, the jobs are not marked as sent.
+
+This prevents losing job results when there is an error.
+
+---
+
+## 12. Daily Runner File
+
+The file `run_daily_job_agent.py` is the main runner file.
+
+It calls the main job search function:
+
+```python
+from search_arbeitsagentur import main
+
+if __name__ == "__main__":
+    print("Starting daily job search agent...")
+    main()
+    print("Daily job search agent completed.")
+```
+
+This file is useful because it gives one simple entry point for running the whole project.
+
+Instead of running multiple files manually, the user can simply run:
+
+```bash
+python run_daily_job_agent.py
+```
+
+---
+
+## 13. Scheduling
+
+The project can be scheduled using Windows Task Scheduler.
+
+The scheduled task runs:
+
+```text
+python run_daily_job_agent.py
+```
+
+This allows the job agent to run automatically every morning.
+
+The local system must be turned on and connected to the internet for the scheduled task to run.
+
+---
+
+## 14. Function Summary
+
+| File                        | Main Purpose                                                                              |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| `config.py`                 | Stores search roles, keywords, negative keywords, and target settings                     |
+| `search_arbeitsagentur.py`  | Searches jobs, parses API results, filters jobs, scores jobs, and sends Telegram messages |
+| `job_scorer.py`             | Calculates job match score and explains the scoring reasons                               |
+| `job_history.py`            | Tracks already-sent jobs using `sent_jobs.json`                                           |
+| `telegram_sender.py`        | Sends job results to Telegram                                                             |
+| `search_company_careers.py` | Stores strategic company career links for future improvement                              |
+| `send_test_message.py`      | Tests whether Telegram setup is working                                                   |
+| `run_daily_job_agent.py`    | Main entry point for running the full job search agent                                    |
+
+---
+
+## 15. Overall Summary
+
+This project does not manually assign jobs.
+
+The script automatically requests job data from the Arbeitsagentur API, parses the JSON response, extracts job information, fetches full job details, filters unsuitable jobs, scores the remaining jobs using a profile-based scoring framework, removes already-sent jobs, and sends the best matches to Telegram.
+
+The scoring framework is manually designed, but it is applied to real job data downloaded from the API.
+
+
 ## Notes
 
 This project currently runs locally on Windows. It will not run if the computer is fully powered off.
