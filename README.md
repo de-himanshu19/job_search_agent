@@ -334,7 +334,7 @@ If successful, the task is ready for daily use.
 
 ---
 
-## Important Files Not Uploaded to GitHub
+## Important Files Not Uploaded to GitHub if you want to publish
 
 These files should not be uploaded:
 
