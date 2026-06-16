@@ -57,20 +57,6 @@ job_search_agent/
 Open PowerShell or VS Code terminal and run:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/job_search_agent.git
-```
-
-Then move into the project folder:
-
-```bash
-cd job_search_agent
-```
-
-Replace `YOUR_USERNAME` with your GitHub username.
-
-Example:
-
-```bash
 git clone https://github.com/de-himanshu19/job_search_agent.git
 cd job_search_agent
 ```
